@@ -1,0 +1,223 @@
+version: "3.9"
+
+networks:
+  raggate_net:
+    driver: bridge
+
+volumes:
+  qdrant_data:
+  searxng_data:
+  openwebui_data:
+  raggate_db_data:
+  caddy_data:
+  caddy_config:
+
+services:
+  # --------------------------------------------------------
+  # 1. CORE SERVICE: ingest-service
+  # --------------------------------------------------------
+  ingest:
+    build: .
+    container_name: raggate-ingest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-768}
+      - KNOWLEDGE_CATEGORIES=${KNOWLEDGE_CATEGORIES}
+      - CHUNK_SIZE=${CHUNK_SIZE:-1000}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
+      - CONFLICT_THRESHOLD=${CONFLICT_THRESHOLD:-0.75}
+      - CLEAN_TEXT=${CLEAN_TEXT:-true}
+      - CLEAN_MIN_RATIO=${CLEAN_MIN_RATIO:-0.5}
+      - CLEAN_MAX_RATIO=${CLEAN_MAX_RATIO:-1.15}
+      - WEBSEARCH_TOP_K=${WEBSEARCH_TOP_K:-5}
+      - WEBSEARCH_EVALUATE=${WEBSEARCH_EVALUATE:-true}
+      - WEBSEARCH_MAX_CHARS=${WEBSEARCH_MAX_CHARS:-4000}
+      - WEBSEARCH_EVAL_CHARS=${WEBSEARCH_EVAL_CHARS:-6000}
+      - CRAWL4AI_TOKEN=${CRAWL4AI_TOKEN:-}
+      - API_KEY=${API_KEY}
+      - REQUIRE_AUTH_FOR_READ=${REQUIRE_AUTH_FOR_READ:-true}
+      - QDRANT_URL=http://qdrant:6333
+      - SEARXNG_URL=http://searxng:8080
+      - CRAWL4AI_URL=http://crawl4ai:11225
+      - DOCLING_URL=http://docling:5000
+      - DB_PATH=/app/data/raggate.db
+      - WATCH_DIR=/watch
+    volumes:
+      - raggate_db_data:/app/data
+      - ./watch:/watch
+    networks:
+      - raggate_net
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+      crawl4ai:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --------------------------------------------------------
+  # 2. VECTOR DB: Qdrant
+  # --------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: raggate-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - raggate_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------
+  # 3. EXTRACTION: Docling
+  # --------------------------------------------------------
+  docling:
+    image: quay.io/ds4sd/docling-serve-cpu:latest
+    container_name: raggate-docling
+    restart: unless-stopped
+    networks:
+      - raggate_net
+
+  # --------------------------------------------------------
+  # 4. WEB CRAWLING: Crawl4AI
+  # --------------------------------------------------------
+  crawl4ai:
+    image: unclecode/crawl4ai:0.8.9
+    container_name: raggate-crawl4ai
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_TOKEN:-}
+    networks:
+      - raggate_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11225/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --------------------------------------------------------
+  # 5. WEB SEARCH: SearXNG Stack
+  # --------------------------------------------------------
+  searxng:
+    image: searxng/searxng:latest
+    container_name: raggate-searxng
+    restart: unless-stopped
+    entrypoint: >
+      sh -c '
+      if [ -z "$SEARXNG_SECRET" ]; then
+        if [ -f "/etc/searxng/secret.txt" ]; then
+          export SEARXNG_SECRET=$(cat /etc/searxng/secret.txt)
+          echo "Using existing SEARXNG_SECRET from /etc/searxng/secret.txt"
+        else
+          echo "Warning: SEARXNG_SECRET is empty, generating a random one and persisting to /etc/searxng/secret.txt"
+          export SEARXNG_SECRET=$(cat /dev/urandom | tr -dc "a-zA-Z0-9" | fold -w 32 | head -n 1)
+          echo $SEARXNG_SECRET > /etc/searxng/secret.txt
+        fi
+      fi;
+      sed -e "s|\$${SEARXNG_SECRET}|$SEARXNG_SECRET|g" -e "s|\$${SEARXNG_BASE_URL}|$SEARXNG_BASE_URL|g" /etc/searxng/settings.yml.template > /etc/searxng/settings.yml;
+      exec /usr/local/searxng/dockerfiles/docker-entrypoint.sh
+      '
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://localhost:8080/}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    networks:
+      - raggate_net
+    depends_on:
+      - searxng-redis
+      - tor
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  searxng-redis:
+    container_name: raggate-searxng-redis
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    networks:
+      - raggate_net
+    command: valkey-server --save 30 1 --loglevel warning
+
+  tor:
+    container_name: raggate-tor
+    image: alpine:latest
+    restart: unless-stopped
+    command: >
+      sh -c "apk add --no-cache tor && echo 'SocksPort 0.0.0.0:9050' > /etc/tor/torrc && su -s /bin/sh -c 'tor -f /etc/tor/torrc' tor"
+    networks:
+      - raggate_net
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9050"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --------------------------------------------------------
+  # PROFILE: OpenWebUI (Optional)
+  # --------------------------------------------------------
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: raggate-openwebui
+    restart: unless-stopped
+    profiles:
+      - with-openwebui
+    ports:
+      - "3000:8080"
+    environment:
+      - VECTOR_DB=chroma
+    volumes:
+      - openwebui_data:/app/backend/data
+    networks:
+      - raggate_net
+
+  # --------------------------------------------------------
+  # PROFILE: Reverse Proxy - Caddy (Optional)
+  # --------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: raggate-caddy
+    restart: unless-stopped
+    profiles:
+      - with-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - PUBLIC_HOSTNAME=${PUBLIC_HOSTNAME:-research.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - raggate_net
+    depends_on:
+      - ingest
