@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite3
+*.db
+.env
+data/
+watch/
+qdrant_data/
+searxng_data/
+openwebui_data/
+caddy_data/
+caddy_config/

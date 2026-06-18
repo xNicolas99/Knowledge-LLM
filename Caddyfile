@@ -1,0 +1,4 @@
+{env.PUBLIC_HOSTNAME} {
+    # Provide the external URL mapping to the ingest service on the internal docker network
+    reverse_proxy ingest:8000
+}
