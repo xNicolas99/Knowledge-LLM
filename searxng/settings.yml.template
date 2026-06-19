@@ -1,0 +1,24 @@
+use_default_settings:
+  engines:
+    remove: [ahmia, torch]
+server:
+  secret_key: "${SEARXNG_SECRET}"
+  base_url: "${SEARXNG_BASE_URL}"
+  limiter: true
+  image_proxy: true
+valkey:
+  url: redis://searxng-redis:6379/0
+search:
+  safe_search: 0
+  formats: [html, json]
+outgoing:
+  request_timeout: 15.0
+engines:
+  - {name: duckduckgo, disabled: false}
+  - {name: brave,      disabled: false}
+  - {name: startpage,  disabled: false}
+  - {name: mojeek,     disabled: false}
+  - {name: qwant,      disabled: false}
+  - {name: wikipedia,  disabled: false}
+  - {name: google,     disabled: false, proxies: {all://: socks5h://tor:9050}}
+  - {name: bing,       disabled: false, proxies: {all://: socks5h://tor:9050}}
