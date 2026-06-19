@@ -79,10 +79,6 @@ RAGgate ist darauf ausgelegt, komplett autark zu laufen (ohne Cloud-Abhängigkei
 | `KNOWLEDGE_CATEGORIES`| Kommagetrennte Kategorien | `it,science,biology,business,general` |
 | `API_KEY` | **Pflicht**: Schutz für schreibende API-Aufrufe | `mein-geheimer-key` |
 | `REQUIRE_AUTH_FOR_READ`| Ob auch Lese-Aufrufe den Key brauchen | `true` |
-| `SEARXNG_SECRET`| Wichtig: Basis-Verschlüsselung für SearXNG | Automatisch generiert falls leer |
-| `CLEAN_BLOCK_CHARS`| Blockgröße für LLM-Bereinigungs-Aufrufe | `6000` |
-| `CRAWL_CONCURRENCY`| Parallele Chromium-Tabs | `3` |
-| `CONFLICT_CHECK_ALL_CATEGORIES`| Sucht über alle Kategorien nach Duplikaten | `false` |
 
 *(Siehe `.env.example` für alle Variablen wie Chunker, Crawler-Tokens, etc.)*
 
@@ -94,7 +90,7 @@ RAGgate ist darauf ausgelegt, komplett autark zu laufen (ohne Cloud-Abhängigkei
 - **Qdrant**: Die Vektor-Datenbank, welche die Dokument-Chunks für die Wissensbasis (aufgeteilt in Kategorien/Collections) vorhält.
 - **Docling**: Ein Service (`docling-serve`), um komplexe Binär- und Office-Dokumente (PDFs, PPTX) in lesbaren Text zu extrahieren.
 - **Crawl4AI**: Ein Headless Chromium Container (gepinnt auf `0.8.9` wegen Stabilität), der rohe URLs in sauberes Markdown rendert (`shm_size: 1gb` wichtig für Chrome).
-- **SearXNG + Tor + Redis**: Eine Meta-Suchmaschine. **Wichtig:** Wir fokussieren die Engine-Liste in der `searxng/settings.yml.template` auf allgemeine Web-Engines (DuckDuckGo, Brave, Startpage, Wikipedia, etc.) und deaktivieren Spezial-Engines, um Müll-Treffer im JSON-Format zu vermeiden. Google und Bing werden bewusst über einen minimalistischen (Alpine) Tor-Container geleitet, um IP-Sperren zu umgehen. Die SearXNG Instanz nutzt einen dynamischen Entrypoint um fehlende API Secrets zur Laufzeit per `sed` sicher zu generieren.
+- **SearXNG + Tor + Redis**: Eine Meta-Suchmaschine. **Wichtig:** Wir fokussieren die Engine-Liste in der `searxng/settings.yml` auf allgemeine Web-Engines (DuckDuckGo, Brave, Startpage, Wikipedia, etc.) und deaktivieren Spezial-Engines, um Müll-Treffer im JSON-Format zu vermeiden. Google und Bing werden bewusst über den Tor-Container geleitet, um IP-Sperren zu umgehen.
 
 ---
 
@@ -166,7 +162,7 @@ Passe vorher in der `.env` die Variable `PUBLIC_HOSTNAME=research.example.com` a
 ## 11. Betrieb & Troubleshooting
 
 - **Daten-Persistenz:** Die SQLite-DB (`app/data`), Qdrant-Vektoren, SearXNG-Configs und Caddy-Zertifikate sind in Docker-Volumes gespeichert. Ein Neustart verliert keine Daten.
-- **Re-Index:** Wenn Embeddings oder LLM-Modelle gewechselt werden, kann über `POST /reindex` ein echter Hintergrundprozess angestoßen werden. Hierbei werden **alle** gespeicherten Payloads aus Qdrant geladen, die Collection wird komplett neu angelegt (wichtig wenn sich die `EMBEDDING_DIM` der Modelle ändert!) und die Texte werden frisch eingebettet/upserted. **Achtung**: Alle alten Vektoren werden hierbei gelöscht und mit neuen Vektoren des aktuellen Modells ersetzt. Der Status ist unter `GET /reindex/status` abfragbar.
+- **Re-Index:** Wenn Embeddings oder LLM-Modelle gewechselt werden, kann über `/reindex` ein Hintergrundprozess angestoßen werden. *(Beachte: in der MVP Version ist dies als Dummy-Logik implementiert).*
 - **Häufige Fehler:**
   - *Ingest erreicht Qdrant nicht*: Prüfe die Start-Reihenfolge. `ingest` wartet via Healthcheck auf `qdrant`.
   - *Crawl4AI liefert leeren Text*: Stelle sicher, dass `shm_size: 1gb` in der `docker-compose.yml` für Crawl4AI greift (Headless-Chrome stürzt sonst bei großen Seiten ab).

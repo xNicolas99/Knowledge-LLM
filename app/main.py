@@ -153,12 +153,12 @@ async def review_decision(decision: ReviewDecision):
 
     if decision.decision == "approved":
         # Process and upsert
-        cleaned_text = await pipeline.clean_text(item["text"])
-        chunks = pipeline.chunk_text(cleaned_text)
+        chunks = pipeline.chunk_text(item["text"])
         processed_chunks = []
         for c in chunks:
+            cleaned = await pipeline.clean_chunk(c)
             processed_chunks.append({
-                "text": c,
+                "text": cleaned,
                 "source": item["source"],
                 "category": item["category"],
                 "tags": [] # Tags could be stored in DB if needed

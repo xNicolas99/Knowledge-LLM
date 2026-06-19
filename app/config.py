@@ -63,13 +63,11 @@ CHUNK_OVERLAP = get_env_int("CHUNK_OVERLAP", 100)
 
 # Enrichment
 CONFLICT_THRESHOLD = get_env_float("CONFLICT_THRESHOLD", 0.75)
-CONFLICT_CHECK_ALL_CATEGORIES = get_env_bool("CONFLICT_CHECK_ALL_CATEGORIES", False)
 
 # Text Cleaning
 CLEAN_TEXT = get_env_bool("CLEAN_TEXT", True)
 CLEAN_MIN_RATIO = get_env_float("CLEAN_MIN_RATIO", 0.5)
 CLEAN_MAX_RATIO = get_env_float("CLEAN_MAX_RATIO", 1.15)
-CLEAN_BLOCK_CHARS = get_env_int("CLEAN_BLOCK_CHARS", 6000)
 
 # Web Search
 WEBSEARCH_TOP_K = get_env_int("WEBSEARCH_TOP_K", 5)
@@ -77,7 +75,6 @@ WEBSEARCH_EVALUATE = get_env_bool("WEBSEARCH_EVALUATE", True)
 WEBSEARCH_MAX_CHARS = get_env_int("WEBSEARCH_MAX_CHARS", 4000)
 WEBSEARCH_EVAL_CHARS = get_env_int("WEBSEARCH_EVAL_CHARS", 6000)
 CRAWL4AI_TOKEN = get_env("CRAWL4AI_TOKEN", "")
-CRAWL_CONCURRENCY = get_env_int("CRAWL_CONCURRENCY", 3)
 
 # Security / Access
 API_KEY = get_env_or_fail("API_KEY")

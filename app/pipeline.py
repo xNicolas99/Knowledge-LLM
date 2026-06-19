@@ -70,52 +70,40 @@ def chunk_text(text: str) -> List[str]:
 
 # --- Cleaning ---
 
-async def clean_text(full_text: str) -> str:
-    """Cleans a full text in blocks using the LLM with length checks to prevent hallucinations."""
-    if not config.CLEAN_TEXT or not full_text.strip():
-        return full_text
+async def clean_chunk(chunk: str) -> str:
+    """Cleans a text chunk using the LLM with length checks to prevent hallucinations."""
+    if not config.CLEAN_TEXT:
+        return chunk
 
     prompt_template = db.get_prompt("clean_text")
     if not prompt_template:
-        return full_text
+        return chunk
 
-    block_size = config.CLEAN_BLOCK_CHARS
-    blocks = [full_text[i:i+block_size] for i in range(0, len(full_text), block_size)]
+    prompt = prompt_template.format(text=chunk)
 
-    cleaned_blocks = []
+    try:
+        cleaned = await llm.chat([{"role": "user", "content": prompt}])
 
-    for block in blocks:
-        if not block.strip():
-            cleaned_blocks.append(block)
-            continue
+        orig_len = len(chunk.strip())
+        new_len = len(cleaned.strip())
 
-        prompt = prompt_template.format(text=block)
-        try:
-            cleaned = await llm.chat([{"role": "user", "content": prompt}])
+        if orig_len == 0:
+            return cleaned
 
-            orig_len = len(block.strip())
-            new_len = len(cleaned.strip())
+        ratio = new_len / orig_len
 
-            if orig_len == 0:
-                cleaned_blocks.append(cleaned)
-                continue
+        # Anti-Hallucination / Anti-Loss protections
+        if ratio < config.CLEAN_MIN_RATIO:
+            logger.warning(f"Cleaning removed too much text (ratio: {ratio:.2f}). Reverting to original.")
+            return chunk
+        if ratio > config.CLEAN_MAX_RATIO:
+            logger.warning(f"Cleaning generated too much text (ratio: {ratio:.2f}). Reverting to original.")
+            return chunk
 
-            ratio = new_len / orig_len
-
-            # Anti-Hallucination / Anti-Loss protections
-            if ratio < config.CLEAN_MIN_RATIO:
-                logger.warning(f"Cleaning removed too much text (ratio: {ratio:.2f}). Reverting block.")
-                cleaned_blocks.append(block)
-            elif ratio > config.CLEAN_MAX_RATIO:
-                logger.warning(f"Cleaning generated too much text (ratio: {ratio:.2f}). Reverting block.")
-                cleaned_blocks.append(block)
-            else:
-                cleaned_blocks.append(cleaned)
-        except Exception as e:
-            logger.error(f"Error during block cleaning: {e}")
-            cleaned_blocks.append(block)
-
-    return "".join(cleaned_blocks)
+        return cleaned
+    except Exception as e:
+        logger.error(f"Error during chunk cleaning: {e}")
+        return chunk
 
 # --- Gating ---
 
@@ -176,137 +164,55 @@ async def enrich(text: str, source: str, force_category: Optional[str] = None) -
     # Semantically search existing knowledge
     # Use a snippet for searching
     search_query = text[:2000]
+    similar_docs = await qdrant_store.search(search_query, category=category, top_k=1)
 
-    highest_score = 0.0
-
-    if config.CONFLICT_CHECK_ALL_CATEGORIES:
-        for cat in config.KNOWLEDGE_CATEGORIES:
-            similar_docs = await qdrant_store.search(search_query, category=cat, top_k=1)
-            if similar_docs and similar_docs[0]["score"] > highest_score:
-                highest_score = similar_docs[0]["score"]
-    else:
-        similar_docs = await qdrant_store.search(search_query, category=category, top_k=1)
-        if similar_docs:
-            highest_score = similar_docs[0]["score"]
-
-    if highest_score >= config.CONFLICT_THRESHOLD:
+    if similar_docs and similar_docs[0]["score"] >= config.CONFLICT_THRESHOLD:
         # Potential conflict / update -> Send to review queue
         db.add_to_review(
             text=text,
             source=source,
             category=category,
-            reason=f"High similarity ({highest_score:.2f}) to existing document."
+            reason=f"High similarity ({similar_docs[0]['score']:.2f}) to existing document."
         )
         return "REVIEW"
 
     # NEW -> Process, clean, and upsert
-
-    # 1. Clean the full text in efficient blocks
-    cleaned_text = await clean_text(text)
-
-    # 2. Chunk the cleaned text for embedding
-    chunks = chunk_text(cleaned_text)
+    chunks = chunk_text(text)
     processed_chunks = []
 
     for c in chunks:
+        cleaned = await clean_chunk(c)
         processed_chunks.append({
-            "text": c,
+            "text": cleaned,
             "source": source,
             "category": category,
             "tags": tags
         })
 
-    # 3. Upsert into Vector DB
     await qdrant_store.upsert(processed_chunks)
     return "NEW"
 
 # --- Reindex Thread Trigger ---
 
 _reindex_task: Optional[asyncio.Task] = None
-_reindex_status = {"status": "idle", "processed": 0, "total": 0, "progress": 0.0, "error": None, "collections": {}}
+_reindex_status = {"status": "idle", "progress": 0.0, "error": None}
 
 async def _reindex_worker(clean: bool):
-    """Background worker to realistically re-embed all documents from Qdrant across categories."""
+    """Background worker to re-embed all documents (simulated logic for now, actual extraction needs original docs or chunk reconstruction)"""
     global _reindex_status
-    _reindex_status = {
-        "status": "running",
-        "processed": 0,
-        "total": 0,
-        "progress": 0.0,
-        "error": None,
-        "collections": {}
-    }
+    _reindex_status = {"status": "running", "progress": 0.0, "error": None}
 
     try:
-        logger.info("Re-indexing started.")
-
-        # 1. Count totals and prep state
-        total_points = 0
-        all_points_by_cat = {}
-        for cat in config.KNOWLEDGE_CATEGORIES:
-            col_name = qdrant_store._get_collection_name(cat)
-            count = await qdrant_store.count_points(col_name)
-            if count > 0:
-                _reindex_status["collections"][col_name] = {"total": count, "processed": 0}
-                total_points += count
-            else:
-                 _reindex_status["collections"][col_name] = {"total": 0, "processed": 0}
-
-        _reindex_status["total"] = total_points
-
-        if total_points == 0:
-            logger.info("No points to re-index.")
-            _reindex_status["status"] = "completed"
-            _reindex_status["progress"] = 100.0
-            return
-
-        # 2. Process each collection
-        for cat in config.KNOWLEDGE_CATEGORIES:
-            col_name = qdrant_store._get_collection_name(cat)
-
-            if _reindex_status["collections"][col_name]["total"] == 0:
-                continue
-
-            # Scroll all payloads for this collection
-            logger.info(f"Scrolling points for {col_name}...")
-            payloads = await qdrant_store.scroll_all(col_name)
-
-            # Recreate the collection (essential if embedding dim changes)
-            await qdrant_store.recreate_collection(col_name)
-
-            # Batch process points
-            batch_size = 64
-            for i in range(0, len(payloads), batch_size):
-                batch = payloads[i:i+batch_size]
-
-                processed_batch = []
-                for p in batch:
-                    text = p.get("text", "")
-                    if clean:
-                        text = await clean_text(text)
-
-                    processed_batch.append({
-                        "text": text,
-                        "source": p.get("source", ""),
-                        "category": p.get("category", cat),
-                        "tags": p.get("tags", [])
-                    })
-
-                # Upsert the new embeddings
-                if processed_batch:
-                    try:
-                        await qdrant_store.upsert(processed_batch)
-                    except Exception as e:
-                        logger.error(f"Failed to upsert batch during reindex of {col_name}: {e}")
-
-                _reindex_status["processed"] += len(batch)
-                _reindex_status["collections"][col_name]["processed"] += len(batch)
-                _reindex_status["progress"] = round((_reindex_status["processed"] / _reindex_status["total"]) * 100.0, 2)
-
-        logger.info("Re-indexing completed.")
+        # In a real Qdrant scroll logic:
+        # 1. Fetch all points
+        # 2. Re-embed
+        # 3. Upsert
+        # Since this requires full text reconstruction from chunks which is complex,
+        # a basic implementation just logs the intent for this specific MVP scope.
+        logger.info("Re-indexing started (Mock process for MVP).")
+        await asyncio.sleep(5) # Simulate work
         _reindex_status["progress"] = 100.0
         _reindex_status["status"] = "completed"
-
     except Exception as e:
         logger.error(f"Reindex failed: {e}")
         _reindex_status["status"] = "failed"

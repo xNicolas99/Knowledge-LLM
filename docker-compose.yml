@@ -122,21 +122,6 @@ services:
     image: searxng/searxng:latest
     container_name: raggate-searxng
     restart: unless-stopped
-    entrypoint: >
-      sh -c '
-      if [ -z "$SEARXNG_SECRET" ]; then
-        if [ -f "/etc/searxng/secret.txt" ]; then
-          export SEARXNG_SECRET=$(cat /etc/searxng/secret.txt)
-          echo "Using existing SEARXNG_SECRET from /etc/searxng/secret.txt"
-        else
-          echo "Warning: SEARXNG_SECRET is empty, generating a random one and persisting to /etc/searxng/secret.txt"
-          export SEARXNG_SECRET=$(cat /dev/urandom | tr -dc "a-zA-Z0-9" | fold -w 32 | head -n 1)
-          echo $SEARXNG_SECRET > /etc/searxng/secret.txt
-        fi
-      fi;
-      sed -e "s|\$${SEARXNG_SECRET}|$SEARXNG_SECRET|g" -e "s|\$${SEARXNG_BASE_URL}|$SEARXNG_BASE_URL|g" /etc/searxng/settings.yml.template > /etc/searxng/settings.yml;
-      exec /usr/local/searxng/dockerfiles/docker-entrypoint.sh
-      '
     environment:
       - SEARXNG_SECRET=${SEARXNG_SECRET}
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://localhost:8080/}
@@ -169,17 +154,10 @@ services:
 
   tor:
     container_name: raggate-tor
-    image: alpine:latest
+    image: dperson/torproxy
     restart: unless-stopped
-    command: >
-      sh -c "apk add --no-cache tor && echo 'SocksPort 0.0.0.0:9050' > /etc/tor/torrc && su -s /bin/sh -c 'tor -f /etc/tor/torrc' tor"
     networks:
       - raggate_net
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "9050"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   # --------------------------------------------------------
   # PROFILE: OpenWebUI (Optional)

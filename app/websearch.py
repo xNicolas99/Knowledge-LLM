@@ -89,27 +89,15 @@ async def websearch(query: str, top_k: int = config.WEBSEARCH_TOP_K, evaluate: b
     if not search_results:
         return []
 
-    # 2. Crawl in parallel with bounded concurrency
-    semaphore = asyncio.Semaphore(config.CRAWL_CONCURRENCY)
-
-    async def bounded_crawl(url: str) -> str:
-        async with semaphore:
-            return await crawl_url(url)
-
-    crawl_tasks = [bounded_crawl(r["url"]) for r in search_results]
-    crawled_texts = await asyncio.gather(*crawl_tasks, return_exceptions=True)
+    # 2. Crawl in parallel
+    crawl_tasks = [crawl_url(r["url"]) for r in search_results]
+    crawled_texts = await asyncio.gather(*crawl_tasks)
 
     final_results = []
 
     # 3. Process & Evaluate
     for i, res in enumerate(search_results):
         raw_text = crawled_texts[i]
-
-        # Check if Exception was returned by gather
-        if isinstance(raw_text, Exception):
-            logger.error(f"Bounded crawl failed for {res['url']}: {raw_text}")
-            continue
-
         if not raw_text:
             continue
 
