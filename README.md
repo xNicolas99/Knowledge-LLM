@@ -105,6 +105,27 @@ Das Wissen wird in getrennte **Qdrant-Collections** basierend auf `KNOWLEDGE_CAT
 Neu eingereichtes Wissen durchläuft einen "Türsteher" (LLM entscheidet über Relevanz und ordnet Kategorien zu). Bei Ähnlichkeit mit bestehendem Wissen (> `CONFLICT_THRESHOLD`) wird es nicht blind überschrieben, sondern landet in der **Review Queue** in der Web-UI.
 Wird ein Text verarbeitet, durchläuft er eine LLM-gestützte Bereinigung. Ein Längenschutz (`CLEAN_MIN_RATIO`, `CLEAN_MAX_RATIO`) verhindert, dass das LLM Texte komplett erfindet oder drastisch kürzt.
 
+### Dokument-Korrektur (`/update-source`)
+
+Über die API kann der Inhalt eines bestehenden Dokuments punktuell korrigiert werden, ohne dass das gesamte Dokument neu importiert werden muss.
+Dies ist nützlich für Anweisungen wie *"Ändere in README.md überall Python 3.10 auf 3.13"*.
+
+**Funktionsweise:**
+1. Die Chunks der Datei (`source`) werden gesammelt und rekonstruiert.
+2. Ein dedizierter, bearbeitbarer Prompt (`update_document`, einstellbar über die Web-UI oder die `/prompt`-API) wendet die gewünschte Änderung exakt an.
+3. **Sicherheitsnetz:** Wenn das Resultat des Modells den Text drastisch einkürzt (unter 70% der Originallänge), bricht das Update als Sicherheitsnetz ("Anti-Lösch-Schutz") ab.
+4. Nach erfolgreicher Änderung werden die neuen Chunks in die bestehende Kategorie geschrieben und mit den alten Tags gespeichert.
+
+**Wichtig:** Es gibt hierbei **kein Undo/Backup**. Bei kritischen Dokumenten sollte immer ein externes Backup vorliegen.
+
+**Aufruf-Beispiel:**
+```bash
+curl -X POST "http://localhost:8000/update-source" \
+  -H "Authorization: Bearer mein-geheimer-key" \
+  -H "Content-Type: application/json" \
+  -d '{"source": "README.md", "change": "Ändere überall Python 3.10 auf 3.13"}'
+```
+
 ---
 
 ## 7. Websuche (`/websearch`)

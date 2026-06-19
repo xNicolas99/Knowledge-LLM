@@ -59,8 +59,24 @@ def init_db():
             "DOKUMENT:\n{text}"
         )
 
+        default_update_prompt = (
+            "Du bearbeitest ein Dokument aus einer technischen Wissensdatenbank.\n"
+            "Wende AUSSCHLIESSLICH die folgende Änderung an:\n\n"
+            "ÄNDERUNG: {change}\n\n"
+            "STRENGE REGELN:\n"
+            "- Wende NUR die beschriebene Änderung an, sonst nichts.\n"
+            "- Erfinde KEINE neuen Fakten und füge KEINE Inhalte hinzu.\n"
+            "- Ändere NICHT die Struktur, Reihenfolge oder Formatierung.\n"
+            "- Entferne KEINE Abschnitte, Zeilen oder Absätze.\n"
+            "- Bei Unsicherheit lieber NICHTS ändern und den Text unverändert zurückgeben.\n"
+            "- Gib NUR den vollständigen, bearbeiteten Dokumenttext zurück – keine Erklärungen, keine Markierungen, kein Kommentar.\n\n"
+            "DOKUMENT:\n"
+            "{document}"
+        )
+
         cursor.execute("INSERT OR IGNORE INTO prompts (name, content) VALUES (?, ?)", ("clean_text", default_clean_prompt))
         cursor.execute("INSERT OR IGNORE INTO prompts (name, content) VALUES (?, ?)", ("gatekeeper", default_gatekeeper_prompt))
+        cursor.execute("INSERT OR IGNORE INTO prompts (name, content) VALUES (?, ?)", ("update_document", default_update_prompt))
 
         conn.commit()
 

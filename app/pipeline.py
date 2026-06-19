@@ -180,17 +180,89 @@ async def enrich(text: str, source: str, force_category: Optional[str] = None) -
     chunks = chunk_text(text)
     processed_chunks = []
 
-    for c in chunks:
+    for i, c in enumerate(chunks):
         cleaned = await clean_chunk(c)
         processed_chunks.append({
             "text": cleaned,
             "source": source,
             "category": category,
-            "tags": tags
+            "tags": tags,
+            "chunk_index": i
         })
 
     await qdrant_store.upsert(processed_chunks)
     return "NEW"
+
+# --- Update Document ---
+
+async def update_source_document(source: str, change_description: str) -> dict:
+    """Updates an existing document in the knowledge base by applying a specific change."""
+    # 1. Fetch chunks
+    chunks = await qdrant_store.scroll_by_source(source)
+    if not chunks:
+        return {"status": "not_found", "message": f"Source '{source}' not found in any category."}
+
+    # 2. Sort by chunk_index to reconstruct original text
+    chunks.sort(key=lambda x: x.get("chunk_index", 0))
+
+    # 3. Reconstruct full text, accounting for overlap
+    # We append the chunk entirely if it's the first one. For subsequent ones,
+    # we assume chunking was done with config.CHUNK_OVERLAP and skip the overlap part.
+    original_text = chunks[0]["text"]
+    for c in chunks[1:]:
+        if len(c["text"]) > config.CHUNK_OVERLAP:
+            original_text += c["text"][config.CHUNK_OVERLAP:]
+        else:
+            original_text += c["text"]
+
+    # 4. Apply change using the LLM and strict update prompt
+    prompt_template = db.get_prompt("update_document")
+    if not prompt_template:
+        return {"status": "error", "message": "update_document prompt not found in database."}
+
+    # Replace manually because text might contain curly braces
+    prompt_filled = prompt_template.replace("{change}", change_description).replace("{document}", original_text)
+
+    try:
+        new_text = await llm.chat([{"role": "user", "content": prompt_filled}])
+    except Exception as e:
+        logger.error(f"Error calling LLM for document update: {e}")
+        return {"status": "error", "message": f"Model error: {e}"}
+
+    # 5. Safety Net
+    if not new_text or not new_text.strip():
+        return {"status": "error", "message": "Sicherheitsabbruch: LLM lieferte leeren Text."}
+
+    if len(new_text) < len(original_text) * 0.70:
+        return {"status": "error", "message": "Sicherheitsabbruch: zu viel Text verloren (<70% Originallänge)."}
+
+    # 6. Extract metadata from the first chunk
+    category = chunks[0]["category"]
+    tags = chunks[0]["tags"]
+
+    # 7. Replace
+    await qdrant_store.delete_by_source(source, category)
+
+    new_chunks = chunk_text(new_text)
+    processed_new_chunks = []
+
+    for i, c in enumerate(new_chunks):
+        processed_new_chunks.append({
+            "text": c,
+            "source": source,
+            "category": category,
+            "tags": tags,
+            "chunk_index": i
+        })
+
+    await qdrant_store.upsert(processed_new_chunks)
+
+    return {
+        "status": "updated",
+        "source": source,
+        "old_chunks": len(chunks),
+        "new_chunks": len(new_chunks)
+    }
 
 # --- Reindex Thread Trigger ---
 
