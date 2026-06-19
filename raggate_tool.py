@@ -2,7 +2,7 @@
 title: RAGgate Knowledge & Research
 author: Jules
 author_url: https://github.com/
-version: 1.0.0
+version: 1.1.0
 description: Integrates the self-hosted RAGgate stack (ingest-service) to provide semantic knowledge base search, web search via SearXNG, and the ability to propose new knowledge updates to the review queue.
 """
 
@@ -131,3 +131,45 @@ class Tools:
 
         except Exception as e:
             return f"Error suggesting knowledge update: {str(e)}"
+
+    def update_knowledge_document(self, source: str, change_description: str) -> str:
+        """
+        Korrigiert ein bestehendes Dokument in der Wissensdatenbank. Nutze dies NUR,
+        wenn der Nutzer explizit bestehenden Inhalt ändern will, eine konkrete Quelldatei
+        nennt (z.B. "README.md") und eine klare Änderungsbeschreibung vorliegt.
+        Beispiel: "Ändere in README.md überall Python 3.10 auf 3.13".
+
+        :param source: The original document source name.
+        :param change_description: The description of what should be changed.
+        """
+        try:
+            url = f"{self.raggate_url}/update-source"
+            payload = {
+                "source": source,
+                "change": change_description
+            }
+
+            response = requests.post(url, json=payload, headers=self._headers(), timeout=60)
+
+            # For 404 or others we want to catch the JSON message if possible
+            if not response.ok:
+                try:
+                    data = response.json()
+                    return f"Fehler bei der Änderung: {data.get('message', response.text)}"
+                except:
+                    response.raise_for_status()
+
+            data = response.json()
+            status = data.get("status", "UNKNOWN")
+
+            if status == "updated":
+                return f"Dokument '{source}' wurde erfolgreich aktualisiert (alte Chunks: {data.get('old_chunks')}, neue Chunks: {data.get('new_chunks')})."
+            elif status == "not_found":
+                return f"Fehler: Quelldatei '{source}' wurde nicht in der Wissensdatenbank gefunden."
+            elif status == "error":
+                return f"Änderung abgebrochen: {data.get('message', 'Unbekannter Fehler')}."
+            else:
+                return f"Unbekannter Status: {status}"
+
+        except Exception as e:
+            return f"Error updating knowledge document: {str(e)}"

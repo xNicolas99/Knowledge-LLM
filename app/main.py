@@ -100,6 +100,14 @@ async def search(q: str, top_k: int = 5, category: Optional[str] = None):
     results = await qdrant_store.search(q, category, top_k)
     return {"results": results}
 
+class UpdateSourceBody(BaseModel):
+    source: str
+    change: str
+
+@app.post("/update-source", dependencies=[Depends(verify_api_key)])
+async def update_source(body: UpdateSourceBody):
+    return await pipeline.update_source_document(body.source, body.change)
+
 @app.post("/upload", dependencies=[Depends(verify_api_key)])
 async def upload_file(
     file: UploadFile = File(...),
@@ -205,7 +213,8 @@ class PromptUpdate(BaseModel):
 async def get_prompts():
     return {
         "clean_text": db.get_prompt("clean_text"),
-        "gatekeeper": db.get_prompt("gatekeeper")
+        "gatekeeper": db.get_prompt("gatekeeper"),
+        "update_document": db.get_prompt("update_document")
     }
 
 @app.post("/prompt", dependencies=[Depends(verify_api_key)])
@@ -319,6 +328,7 @@ async def read_root():
                 const data = await res.json();
                 document.getElementById('prompt-clean').value = data.clean_text || "";
                 document.getElementById('prompt-gate').value = data.gatekeeper || "";
+                document.getElementById('prompt-update').value = data.update_document || "";
             }}
 
             async function savePrompt(name, elementId) {{
@@ -407,6 +417,15 @@ async def read_root():
                     </div>
                     <textarea id="prompt-gate" rows="6" class="w-full border p-2 rounded font-mono text-sm"></textarea>
                     <button onclick="savePrompt('gatekeeper', 'prompt-gate')" class="mt-2 bg-gray-800 text-white px-4 py-2 rounded hover:bg-black">Save Gatekeeper Prompt</button>
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="font-medium">Update Document Prompt</label>
+                        <span id="status-prompt-update" class="text-sm text-green-600"></span>
+                    </div>
+                    <textarea id="prompt-update" rows="6" class="w-full border p-2 rounded font-mono text-sm"></textarea>
+                    <button onclick="savePrompt('update_document', 'prompt-update')" class="mt-2 bg-gray-800 text-white px-4 py-2 rounded hover:bg-black">Save Update Document Prompt</button>
                 </div>
             </div>
 

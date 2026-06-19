@@ -2,7 +2,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, ScoredPoint
+from qdrant_client.models import Distance, VectorParams, PointStruct, ScoredPoint, Filter, FieldCondition, MatchValue
 from app import config
 from app.llm import embed
 
@@ -87,7 +87,8 @@ async def upsert(chunks: List[Dict[str, Any]]):
                 "text": chunk["text"],
                 "source": chunk.get("source", ""),
                 "category": chunk.get("category", "general"),
-                "tags": chunk.get("tags", [])
+                "tags": chunk.get("tags", []),
+                "chunk_index": chunk.get("chunk_index", i)
             }
         )
 
@@ -105,6 +106,94 @@ async def upsert(chunks: List[Dict[str, Any]]):
             logger.info(f"Upserted {len(points)} points into {col_name}")
         except Exception as e:
             logger.error(f"Error upserting into {col_name}: {e}")
+
+async def scroll_by_source(source: str) -> List[Dict]:
+    """Scroll through all category collections to find chunks by source."""
+    all_chunks = []
+
+    scroll_filter = Filter(
+        must=[
+            FieldCondition(
+                key="source",
+                match=MatchValue(value=source)
+            )
+        ]
+    )
+
+    for cat in config.KNOWLEDGE_CATEGORIES:
+        col_name = _get_collection_name(cat)
+
+        try:
+            # We need to loop until next_page_offset is None
+            offset = None
+            while True:
+                records, next_page_offset = await client.scroll(
+                    collection_name=col_name,
+                    scroll_filter=scroll_filter,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset
+                )
+
+                for r in records:
+                    all_chunks.append({
+                        "id": r.id,
+                        "text": r.payload.get("text", ""),
+                        "source": r.payload.get("source", ""),
+                        "category": r.payload.get("category", cat),
+                        "tags": r.payload.get("tags", []),
+                        "chunk_index": r.payload.get("chunk_index", 0)
+                    })
+
+                if next_page_offset is None:
+                    break
+                offset = next_page_offset
+
+        except Exception as e:
+            logger.error(f"Error scrolling Qdrant collection {col_name} for source {source}: {e}")
+
+    return all_chunks
+
+async def delete_by_source(source: str, category: str) -> None:
+    """Deletes all chunks from a specific source in a given category."""
+    col_name = _get_collection_name(category)
+    try:
+        await client.delete(
+            collection_name=col_name,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(
+                        key="source",
+                        match=MatchValue(value=source)
+                    )
+                ]
+            ),
+            wait=True
+        )
+        logger.info(f"Deleted source {source} from {col_name}")
+    except Exception as e:
+        logger.error(f"Error deleting source {source} from {col_name}: {e}")
+
+async def count_by_source(source: str, category: str) -> int:
+    """Counts how many chunks belong to a specific source in a category."""
+    col_name = _get_collection_name(category)
+    try:
+        count_result = await client.count(
+            collection_name=col_name,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="source",
+                        match=MatchValue(value=source)
+                    )
+                ]
+            )
+        )
+        return count_result.count
+    except Exception as e:
+        logger.error(f"Error counting source {source} in {col_name}: {e}")
+        return 0
 
 async def get_stats() -> Dict[str, Any]:
     """Retrieve points count for all knowledge base collections."""
